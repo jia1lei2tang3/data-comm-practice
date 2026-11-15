@@ -222,6 +222,7 @@
         <button data-mode="seq" class="on">顺序</button>
         <button data-mode="rand">随机</button>
       </div>
+      <button class="chip" id="optShuffleBtn" aria-pressed="false">选项乱序</button>
       <div class="pick-count">已选 <b id="pickCount" class="mono">0</b> 题</div>
     </div>
 
@@ -314,7 +315,11 @@ let pos = 0;
 let correctCount = 0;
 let judged = false;
 let mode = 'seq';
+let optShuffle = false;
+let curAnswer = '';   // 本题展示用的正确选项字母（乱序后重排）
+let curOpts = [];     // 本题渲染的选项 [{key, orig, text, images}]
 let sessionAnswers = {};  // 本次练习作答记录
+let sessionOrig = {};     // 本次练习作答的原始选项字母
 
 /* ---------- 工具 ---------- */
 const $ = id => document.getElementById(id);
@@ -370,12 +375,17 @@ function renderHome() {
     }
   }
   if (store.mode === 'rand') setMode('rand');
+  if (store.optShuffle) {
+    optShuffle = true;
+    $('optShuffleBtn').classList.add('on');
+    $('optShuffleBtn').setAttribute('aria-pressed', 'true');
+  }
   updatePickCount();
   $('wrongCount').textContent = Object.keys(store.wrong).length || '';
 }
 
 function selectedSheets() {
-  return Array.from(document.querySelectorAll('.chip.on')).map(b => b.dataset.sheet);
+  return Array.from(document.querySelectorAll('.chip.on[data-sheet]')).map(b => b.dataset.sheet);
 }
 function updatePickCount() {
   const n = selectedSheets().reduce((s, x) => s + BY_SHEET[x].length, 0);
@@ -390,6 +400,12 @@ function setMode(m) {
 $('modePick').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   setMode(b.dataset.mode);
+});
+$('optShuffleBtn').addEventListener('click', () => {
+  optShuffle = !optShuffle;
+  $('optShuffleBtn').classList.toggle('on', optShuffle);
+  $('optShuffleBtn').setAttribute('aria-pressed', optShuffle);
+  store.optShuffle = optShuffle; saveStore();
 });
 
 /* ---------- 出题 ---------- */
@@ -407,7 +423,7 @@ function buildQuiz(sheets, shuffle) {
 function startQuiz(sheets, shuffle) {
   buildQuiz(sheets, shuffle);
   if (!quiz.length) { toast('没有题目'); return; }
-  pos = 0; correctCount = 0; sessionAnswers = {};
+  pos = 0; correctCount = 0; sessionAnswers = {}; sessionOrig = {};
   $('home').classList.add('hidden');
   $('result').classList.add('hidden');
   $('quiz').classList.remove('hidden');
@@ -426,7 +442,7 @@ $('wrongBookBtn').addEventListener('click', () => {
   buildQuiz(sheets, false);
   quiz = quiz.filter(q => store.wrong[qid(q)]);
   if (!quiz.length) { toast('没有错题'); return; }
-  pos = 0; correctCount = 0; sessionAnswers = {};
+  pos = 0; correctCount = 0; sessionAnswers = {}; sessionOrig = {};
   $('home').classList.add('hidden');
   $('result').classList.add('hidden');
   $('quiz').classList.remove('hidden');
@@ -475,7 +491,21 @@ function renderQuestion() {
     }
     optsEl.querySelector('.fill-input').focus();
   } else {
-    q.options.forEach((o, i) => {
+    let opts = q.options.map(o => Object.assign({}, o));
+    let ansKey = q.answer;
+    if (optShuffle) {
+      for (let i = opts.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [opts[i], opts[j]] = [opts[j], opts[i]];
+      }
+      const KEYS = 'ABCDEFGH';
+      const idx = opts.findIndex(o => o.key === q.answer);
+      opts = opts.map((o, i) => Object.assign({}, o, { key: KEYS[i], orig: o.key }));
+      if (idx >= 0) ansKey = KEYS[idx];
+    }
+    curAnswer = ansKey;
+    curOpts = opts;
+    opts.forEach((o, i) => {
       const key = o.key || String(i);
       const b = document.createElement('button');
       b.className = 'opt';
@@ -539,15 +569,17 @@ function choose(key) {
   judged = true;
   const q = quiz[pos];
   sessionAnswers[qid(q)] = key;
+  const opt = curOpts.find(o => o.key === key);
+  sessionOrig[qid(q)] = opt ? (opt.orig || opt.key) : key;
   document.querySelectorAll('.opt').forEach(b => {
     b.disabled = true;
-    if (b.dataset.key === q.answer) b.classList.add('right');
+    if (b.dataset.key === curAnswer) b.classList.add('right');
   });
-  const ok = key === q.answer;
+  const ok = key === curAnswer;
   if (!ok) {
     document.querySelector('.opt[data-key="' + key + '"]').classList.add('wrong');
   }
-  finishJudge(ok, null, q.answer);
+  finishJudge(ok, null, curAnswer);
 }
 
 function submitFill() {
@@ -598,9 +630,13 @@ function showResult() {
     for (const q of wrongQs) {
       const div = document.createElement('div');
       div.className = 'wrong-item';
-      div.innerHTML = '<span class="mono">' + q.index + '.</span> ' + escapeHtml(q.body) +
+      let htmlStr = '<span class="mono">' + q.index + '.</span> ' + escapeHtml(q.body) +
         '<br><span class="wb">你的答案 </span><span class="ans-bad">' + escapeHtml(pickedOf(q)) +
         '</span><span class="wb"> · 正确答案 </span><span class="ans-good">' + escapeHtml(q.answer) + '</span>';
+      if (q.explain) {
+        htmlStr += '<br><span class="wb">解析 </span>' + escapeHtml(q.explain);
+      }
+      div.innerHTML = htmlStr;
       wl.appendChild(div);
     }
   } else {
@@ -609,7 +645,7 @@ function showResult() {
 }
 
 function pickedOf(q) {
-  return sessionAnswers[qid(q)] || '未作答';
+  return sessionOrig[qid(q)] || sessionAnswers[qid(q)] || '未作答';
 }
 $('againBtn').addEventListener('click', () => {
   startQuiz(quiz.length ? [...new Set(quiz.map(q => q.sheet))] : selectedSheets(), mode === 'rand');
@@ -620,7 +656,7 @@ $('onlyWrongBtn').addEventListener('click', () => {
   const sheets = [...new Set(ids.map(i => i.split('|')[0]))];
   buildQuiz(sheets, false);
   quiz = quiz.filter(q => store.wrong[qid(q)]);
-  pos = 0; correctCount = 0; sessionAnswers = {};
+  pos = 0; correctCount = 0; sessionAnswers = {}; sessionOrig = {};
   $('result').classList.add('hidden');
   $('quiz').classList.remove('hidden');
   renderQuestion();
