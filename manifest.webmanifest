@@ -1,0 +1,14 @@
+{
+  "name": "数据通信与网络 练习题",
+  "short_name": "数据通信练习",
+  "description": "数据通信与网络课程练习题，单选与填空，含解析与错题本",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#10161F",
+  "theme_color": "#10161F",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
