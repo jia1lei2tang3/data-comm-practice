@@ -82,7 +82,24 @@
   .chip.on {
     color: var(--accent); border-color: var(--accent); background: var(--accent-dim);
   }
+  .chip.partial { color: var(--accent); border-color: var(--border); background: var(--accent-dim); }
   .chip .mono { font-size: 11.5px; opacity: .8; }
+  .chip-sel { font-size: 12px; padding: 3px 8px; border-radius: 6px; color: var(--muted); }
+
+  /* ---------- 逐题选择页 ---------- */
+  .pick-list { margin-bottom: 16px; }
+  .pick-item {
+    display: flex; align-items: flex-start; gap: 10px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 9px 12px; margin-bottom: 6px;
+    cursor: pointer; font-size: 13.5px; line-height: 1.55;
+  }
+  .pick-item.on { border-color: var(--accent); }
+  .pick-item input { margin-top: 4px; accent-color: var(--accent); }
+  .pick-item .pick-num { color: var(--accent); font-weight: 600; white-space: nowrap; }
+  .pick-item .pick-text { color: var(--muted); }
+  .picker-foot { position: sticky; bottom: 12px; }
+  .picker-foot .start-btn { box-shadow: 0 4px 16px rgba(0, 0, 0, .5); }
   .mode-row {
     display: flex; align-items: center; justify-content: space-between;
     margin-bottom: 22px;
@@ -222,6 +239,10 @@
         <button data-mode="seq" class="on">顺序</button>
         <button data-mode="rand">随机</button>
       </div>
+      <div class="mode-pick" id="qmodePick">
+        <button data-qmode="practice" class="on">练习</button>
+        <button data-qmode="test">测试</button>
+      </div>
       <button class="chip" id="optShuffleBtn" aria-pressed="false">选项乱序</button>
       <div class="pick-count">已选 <b id="pickCount" class="mono">0</b> 题</div>
     </div>
@@ -229,6 +250,19 @@
     <div class="start-row">
       <button class="start-btn" id="startBtn" disabled><span class="led"></span>开始练习</button>
       <button class="wrong-btn" id="wrongBookBtn">错题本 <b id="wrongCount" class="mono"></b></button>
+    </div>
+  </section>
+
+  <!-- 逐题选择页 -->
+  <section id="picker" class="hidden">
+    <div class="quiz-top">
+      <button class="back-btn" id="pickerBackBtn">← 返回</button>
+      <div class="quiz-meta" id="pickerTitle"></div>
+      <button class="back-btn" id="pickerToggleBtn">全选</button>
+    </div>
+    <div class="pick-list" id="pickList"></div>
+    <div class="start-row picker-foot">
+      <button class="start-btn" id="pickerDoneBtn"><span class="led"></span>完成选择</button>
     </div>
   </section>
 
@@ -315,7 +349,10 @@ let pos = 0;
 let correctCount = 0;
 let judged = false;
 let mode = 'seq';
+let qmode = 'practice';
 let optShuffle = false;
+let sel = {};         // 已选题：{题库名: Set(题号)}
+let pickerMode = '';  // 选择页来源：题库名 或 'wrong'
 let curAnswer = '';   // 本题展示用的正确选项字母（乱序后重排）
 let curOpts = [];     // 本题渲染的选项 [{key, orig, text, images}]
 let sessionAnswers = {};  // 本次练习作答记录
@@ -326,6 +363,34 @@ const $ = id => document.getElementById(id);
 function toast(msg) {
   const t = $('toast'); t.textContent = msg; t.classList.add('show');
   clearTimeout(t._timer); t._timer = setTimeout(() => t.classList.remove('show'), 1800);
+}
+
+/* ---------- 选题集合 ---------- */
+function selCount() {
+  return Object.values(sel).reduce((s, set) => s + set.size, 0);
+}
+function sheetSelState(s) {
+  const set = sel[s];
+  if (!set || set.size === 0) return 'off';
+  return set.size === BY_SHEET[s].length ? 'on' : 'partial';
+}
+function toggleWholeSheet(s) {
+  const state = sheetSelState(s);
+  if (state === 'on') delete sel[s];
+  else sel[s] = new Set(BY_SHEET[s].map(q => q.index));
+  saveStore();
+  updatePickCount();
+  refreshChip(s);
+}
+function refreshChip(s) {
+  const chip = document.querySelector('.chip[data-sheet="' + s + '"]');
+  if (!chip) return;
+  const state = sheetSelState(s);
+  chip.classList.remove('on', 'partial');
+  if (state !== 'off') chip.classList.add(state);
+  chip.setAttribute('aria-pressed', state !== 'off');
+  chip.closest('.stack-bar').classList.toggle(
+    'on', chip.closest('.stack-bar').querySelectorAll('.chip.on, .chip.partial').length > 0);
 }
 
 /* ---------- 首页 ---------- */
@@ -350,31 +415,35 @@ function renderHome() {
     for (const s of c.sheets) {
       const n = BY_SHEET[s].length;
       const sub = CARD_ALIAS[s] || (s.includes('课后测试') ? '课后测试' : '作业');
+      const wrap = document.createElement('span');
+      wrap.style.display = 'inline-flex';
+      wrap.style.gap = '4px';
       const b = document.createElement('button');
       b.className = 'chip';
       b.dataset.sheet = s;
       b.setAttribute('aria-pressed', 'false');
       b.innerHTML = sub + ' <span class="mono">' + n + '</span>';
-      b.addEventListener('click', () => {
-        const on = b.classList.toggle('on');
-        b.setAttribute('aria-pressed', on);
-        bar.classList.toggle('on', bar.querySelectorAll('.chip.on').length > 0);
-        updatePickCount();
-      });
-      toggles.appendChild(b);
+      b.addEventListener('click', () => toggleWholeSheet(s));
+      const pick = document.createElement('button');
+      pick.className = 'chip-sel';
+      pick.textContent = '选题';
+      pick.title = '逐题选择';
+      pick.addEventListener('click', () => openPicker(s));
+      wrap.appendChild(b); wrap.appendChild(pick);
+      toggles.appendChild(wrap);
     }
     bar.appendChild(label); bar.appendChild(toggles);
     stackEl.appendChild(bar);
   }
-  if (store.sheets) {
-    for (const b of stackEl.querySelectorAll('.chip')) {
-      if (store.sheets.includes(b.dataset.sheet)) {
-        b.classList.add('on'); b.setAttribute('aria-pressed', 'true');
-        b.closest('.stack-bar').classList.add('on');
-      }
+  if (store.sel) {
+    sel = {};
+    for (const [s, idxs] of Object.entries(store.sel)) {
+      sel[s] = new Set(idxs);
     }
   }
+  for (const s of SHEET_ORDER) refreshChip(s);
   if (store.mode === 'rand') setMode('rand');
+  if (store.qmode === 'test') setQmode('test');
   if (store.optShuffle) {
     optShuffle = true;
     $('optShuffleBtn').classList.add('on');
@@ -384,22 +453,31 @@ function renderHome() {
   $('wrongCount').textContent = Object.keys(store.wrong).length || '';
 }
 
-function selectedSheets() {
-  return Array.from(document.querySelectorAll('.chip.on[data-sheet]')).map(b => b.dataset.sheet);
-}
 function updatePickCount() {
-  const n = selectedSheets().reduce((s, x) => s + BY_SHEET[x].length, 0);
+  const n = selCount();
   $('pickCount').textContent = n;
   $('startBtn').disabled = n === 0;
+  $('startBtn').innerHTML = '<span class="led"></span>' +
+    (qmode === 'test' ? '开始测试' : '开始练习');
 }
 function setMode(m) {
   mode = m;
   document.querySelectorAll('#modePick button').forEach(b =>
     b.classList.toggle('on', b.dataset.mode === m));
 }
+function setQmode(m) {
+  qmode = m;
+  document.querySelectorAll('#qmodePick button').forEach(b =>
+    b.classList.toggle('on', b.dataset.qmode === m));
+  updatePickCount();
+}
 $('modePick').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   setMode(b.dataset.mode);
+});
+$('qmodePick').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  setQmode(b.dataset.qmode);
 });
 $('optShuffleBtn').addEventListener('click', () => {
   optShuffle = !optShuffle;
@@ -408,10 +486,105 @@ $('optShuffleBtn').addEventListener('click', () => {
   store.optShuffle = optShuffle; saveStore();
 });
 
+/* ---------- 逐题选择页 ---------- */
+function openPicker(sheet) {
+  pickerMode = sheet;
+  $('home').classList.add('hidden');
+  $('picker').classList.remove('hidden');
+  $('pickerTitle').textContent = sheet === 'wrong' ? '错题本' : sheet;
+  renderPickList();
+}
+function pickerQuestions() {
+  if (pickerMode === 'wrong') {
+    return DATA.filter(q => store.wrong[qid(q)]);
+  }
+  return BY_SHEET[pickerMode] || [];
+}
+function renderPickList() {
+  const list = $('pickList');
+  list.innerHTML = '';
+  const qs = pickerQuestions();
+  if (!qs.length) {
+    const empty = document.createElement('div');
+    empty.className = 'pick-item';
+    empty.style.cursor = 'default';
+    empty.innerHTML = '<span class="pick-text">还没有错题</span>';
+    list.appendChild(empty);
+    $('pickerToggleBtn').textContent = '全选';
+    return;
+  }
+  const allOn = qs.every(q => (sel[q.sheet] || new Set()).has(q.index));
+  $('pickerToggleBtn').textContent = allOn ? '全不选' : '全选';
+  for (const q of qs) {
+    const row = document.createElement('div');
+    row.className = 'pick-item';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = (sel[q.sheet] || new Set()).has(q.index);
+    cb.addEventListener('change', () => {
+      if (cb.checked) {
+        if (!sel[q.sheet]) sel[q.sheet] = new Set();
+        sel[q.sheet].add(q.index);
+      } else if (sel[q.sheet]) {
+        sel[q.sheet].delete(q.index);
+        if (!sel[q.sheet].size) delete sel[q.sheet];
+      }
+      row.classList.toggle('on', cb.checked);
+      saveStore();
+      if (pickerMode !== 'wrong') refreshChip(q.sheet);
+    });
+    row.addEventListener('click', e => {
+      if (e.target !== cb) cb.click();
+    });
+    const num = document.createElement('span');
+    num.className = 'pick-num mono';
+    num.textContent = q.index + '.';
+    const txt = document.createElement('span');
+    txt.className = 'pick-text';
+    txt.textContent = (q.body || '').slice(0, 42);
+    row.appendChild(cb); row.appendChild(num); row.appendChild(txt);
+    row.classList.toggle('on', cb.checked);
+    list.appendChild(row);
+  }
+}
+$('pickerToggleBtn').addEventListener('click', () => {
+  const qs = pickerQuestions();
+  if (!qs.length) return;
+  const allOn = qs.every(q => (sel[q.sheet] || new Set()).has(q.index));
+  for (const q of qs) {
+    if (allOn) {
+      if (sel[q.sheet]) sel[q.sheet].delete(q.index);
+      if (sel[q.sheet] && !sel[q.sheet].size) delete sel[q.sheet];
+    } else {
+      if (!sel[q.sheet]) sel[q.sheet] = new Set();
+      sel[q.sheet].add(q.index);
+    }
+  }
+  saveStore();
+  if (pickerMode !== 'wrong') refreshChip(pickerMode);
+  renderPickList();
+});
+$('pickerBackBtn').addEventListener('click', () => {
+  $('picker').classList.add('hidden');
+  $('home').classList.remove('hidden');
+  updatePickCount();
+});
+$('pickerDoneBtn').addEventListener('click', () => {
+  $('picker').classList.add('hidden');
+  $('home').classList.remove('hidden');
+  updatePickCount();
+});
+
 /* ---------- 出题 ---------- */
-function buildQuiz(sheets, shuffle) {
+function buildQuizFromSel(shuffle) {
   quiz = [];
-  for (const s of sheets) quiz.push(...BY_SHEET[s]);
+  for (const s of SHEET_ORDER) {
+    const set = sel[s];
+    if (!set || !set.size) continue;
+    for (const q of BY_SHEET[s]) {
+      if (set.has(q.index)) quiz.push(q);
+    }
+  }
   if (shuffle) {
     for (let i = quiz.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -420,33 +593,27 @@ function buildQuiz(sheets, shuffle) {
   }
 }
 
-function startQuiz(sheets, shuffle) {
-  buildQuiz(sheets, shuffle);
+function startQuiz(shuffle) {
+  buildQuizFromSel(shuffle);
   if (!quiz.length) { toast('没有题目'); return; }
   pos = 0; correctCount = 0; sessionAnswers = {}; sessionOrig = {};
   $('home').classList.add('hidden');
+  $('picker').classList.add('hidden');
   $('result').classList.add('hidden');
   $('quiz').classList.remove('hidden');
   renderQuestion();
 }
 
 $('startBtn').addEventListener('click', () => {
-  const sheets = selectedSheets();
-  store.sheets = sheets; store.mode = mode; saveStore();
-  startQuiz(sheets, mode === 'rand');
+  if (!selCount()) { toast('请先选题'); return; }
+  store.sel = {};
+  for (const [s, set] of Object.entries(sel)) store.sel[s] = [...set];
+  store.mode = mode; store.qmode = qmode; saveStore();
+  startQuiz(mode === 'rand');
 });
 $('wrongBookBtn').addEventListener('click', () => {
-  const ids = Object.keys(store.wrong);
-  if (!ids.length) { toast('还没有错题'); return; }
-  const sheets = [...new Set(ids.map(i => i.split('|')[0]))];
-  buildQuiz(sheets, false);
-  quiz = quiz.filter(q => store.wrong[qid(q)]);
-  if (!quiz.length) { toast('没有错题'); return; }
-  pos = 0; correctCount = 0; sessionAnswers = {}; sessionOrig = {};
-  $('home').classList.add('hidden');
-  $('result').classList.add('hidden');
-  $('quiz').classList.remove('hidden');
-  renderQuestion();
+  if (!Object.keys(store.wrong).length) { toast('还没有错题'); return; }
+  openPicker('wrong');
 });
 
 /* ---------- 答题 ---------- */
@@ -545,21 +712,26 @@ function showExplain(q) {
   nextRow.insertAdjacentElement('beforebegin', div);
 }
 
-function finishJudge(ok, wrongMark, correctText) {
+function finishJudge(ok, correctText) {
+  if (ok) correctCount++;
+  else store.wrong[qid(quiz[pos])] = 1;
+  saveStore();
+  $('barFill').style.width = ((pos + 1) / quiz.length * 100) + '%';
+  if (qmode === 'test') {
+    if (pos + 1 < quiz.length) { pos++; renderQuestion(); }
+    else showResult();
+    return;
+  }
   const fb = $('feedback');
   fb.classList.remove('hidden', 'good', 'bad');
   if (ok) {
-    correctCount++;
     fb.textContent = '回答正确';
     fb.classList.add('good');
   } else {
     fb.textContent = '回答错误，正确答案：' + correctText;
     fb.classList.add('bad');
-    store.wrong[qid(quiz[pos])] = 1;
   }
-  saveStore();
   showExplain(quiz[pos]);
-  $('barFill').style.width = ((pos + 1) / quiz.length * 100) + '%';
   $('nextBtn').classList.remove('hidden');
   $('nextBtn').textContent = pos + 1 < quiz.length ? '下一题' : '查看结果';
 }
@@ -571,15 +743,17 @@ function choose(key) {
   sessionAnswers[qid(q)] = key;
   const opt = curOpts.find(o => o.key === key);
   sessionOrig[qid(q)] = opt ? (opt.orig || opt.key) : key;
-  document.querySelectorAll('.opt').forEach(b => {
-    b.disabled = true;
-    if (b.dataset.key === curAnswer) b.classList.add('right');
-  });
   const ok = key === curAnswer;
-  if (!ok) {
-    document.querySelector('.opt[data-key="' + key + '"]').classList.add('wrong');
+  if (qmode !== 'test') {
+    document.querySelectorAll('.opt').forEach(b => {
+      b.disabled = true;
+      if (b.dataset.key === curAnswer) b.classList.add('right');
+    });
+    if (!ok) {
+      document.querySelector('.opt[data-key="' + key + '"]').classList.add('wrong');
+    }
   }
-  finishJudge(ok, null, curAnswer);
+  finishJudge(ok, curAnswer);
 }
 
 function submitFill() {
@@ -597,13 +771,17 @@ function submitFill() {
     const accepts = Array.isArray(q.answer) ? (q.answer[i] || []) : [];
     correct.push(accepts.join('/'));
     const hit = accepts.some(a => String(a).trim().toLowerCase() === val.toLowerCase());
-    inp.disabled = true;
-    if (hit) inp.classList.add('right');
-    else { ok = false; inp.classList.add('wrong'); }
+    if (qmode !== 'test') {
+      inp.disabled = true;
+      if (hit) inp.classList.add('right');
+      else { ok = false; inp.classList.add('wrong'); }
+    } else if (!hit) {
+      ok = false;
+    }
   });
   judged = true;
   sessionAnswers[qid(q)] = given.join(';');
-  finishJudge(ok, null, correct.join('；'));
+  finishJudge(ok, correct.join('；'));
 }
 
 function next() {
@@ -619,7 +797,7 @@ function showResult() {
   $('result').classList.remove('hidden');
   const total = quiz.length;
   const pct = Math.round(correctCount / total * 100);
-  $('resultTitle').textContent = '练习完成';
+  $('resultTitle').textContent = qmode === 'test' ? '测试完成' : '练习完成';
   $('resultPct').textContent = pct + '%';
   $('resultSub').textContent = '答对 ' + correctCount + ' / ' + total + ' 题';
   const wrongQs = quiz.filter(q => store.wrong[qid(q)]);
@@ -648,14 +826,11 @@ function pickedOf(q) {
   return sessionOrig[qid(q)] || sessionAnswers[qid(q)] || '未作答';
 }
 $('againBtn').addEventListener('click', () => {
-  startQuiz(quiz.length ? [...new Set(quiz.map(q => q.sheet))] : selectedSheets(), mode === 'rand');
+  startQuiz(mode === 'rand');
 });
 $('onlyWrongBtn').addEventListener('click', () => {
-  const ids = Object.keys(store.wrong);
-  if (!ids.length) { toast('没有错题'); return; }
-  const sheets = [...new Set(ids.map(i => i.split('|')[0]))];
-  buildQuiz(sheets, false);
-  quiz = quiz.filter(q => store.wrong[qid(q)]);
+  quiz = DATA.filter(q => store.wrong[qid(q)]);
+  if (!quiz.length) { toast('没有错题'); return; }
   pos = 0; correctCount = 0; sessionAnswers = {}; sessionOrig = {};
   $('result').classList.add('hidden');
   $('quiz').classList.remove('hidden');
@@ -667,8 +842,10 @@ $('backBtn').addEventListener('click', goHome);
 function goHome() {
   $('quiz').classList.add('hidden');
   $('result').classList.add('hidden');
+  $('picker').classList.add('hidden');
   $('home').classList.remove('hidden');
   $('wrongCount').textContent = Object.keys(store.wrong).length || '';
+  updatePickCount();
 }
 
 /* ---------- 键盘 ---------- */
