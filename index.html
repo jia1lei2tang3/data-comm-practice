@@ -87,6 +87,12 @@
   .chip-sel { font-size: 12px; padding: 3px 8px; border-radius: 6px; color: var(--muted); }
 
   /* ---------- 逐题选择页 ---------- */
+  .user-input {
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); font-size: 13px;
+    padding: 4px 10px; width: 200px; font-family: inherit;
+  }
+  .user-input:focus { outline: none; border-color: var(--accent); }
   .draw-label { color: var(--muted); font-size: 13.5px; white-space: nowrap; }
   .draw-input { flex: none; width: 84px; text-align: center; }
   .draw-btn { flex: 1; max-width: 200px; padding: 9px; font-weight: 600; }
@@ -236,8 +242,9 @@
       <div class="home-sub">雨课堂题库导出 · 共 <span id="totalCount" class="mono"></span> 题 · 进度保存在本机</div>
       <div class="home-sub">题库内容来自课程 · 禁止营利性使用</div>
       <div class="home-sub">
-        用户：<b id="userNameLabel" class="mono"></b>
-        <button class="back-btn" id="switchUserBtn">切换用户</button>
+        用户：
+        <input class="user-input" id="userNameInput" placeholder="输入名字，进度互不影响" autocomplete="off">
+        <button class="back-btn" id="switchUserBtn">确定</button>
       </div>
     </header>
 
@@ -446,7 +453,7 @@ function refreshChip(s) {
 /* ---------- 首页 ---------- */
 function renderHome() {
   $('totalCount').textContent = DATA.length;
-  $('userNameLabel').textContent = userName || '默认';
+  $('userNameInput').value = userName || '默认';
   const stackEl = $('stack');
   stackEl.innerHTML = '';
   for (const c of CHAPTERS) {
@@ -542,8 +549,10 @@ $('optShuffleBtn').addEventListener('click', () => {
   store.optShuffle = optShuffle; saveStore();
 });
 $('switchUserBtn').addEventListener('click', () => {
-  const name = prompt('输入用户名（各人进度互不影响）：', userName);
-  if (name !== null) switchUser(name);
+  switchUser($('userNameInput').value);
+});
+$('userNameInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') switchUser($('userNameInput').value);
 });
 $('drawBtn').addEventListener('click', () => {
   if (!selCount()) { toast('请先选题'); return; }
