@@ -93,6 +93,8 @@
     padding: 4px 10px; width: 200px; font-family: inherit;
   }
   .user-input:focus { outline: none; border-color: var(--accent); }
+  #identChoices { display: flex; gap: 8px; flex-wrap: wrap; }
+  #identChoices .back-btn { font-size: 12.5px; padding: 4px 10px; }
   .draw-label { color: var(--muted); font-size: 13.5px; white-space: nowrap; }
   .draw-input { flex: none; width: 84px; text-align: center; }
   .draw-btn { flex: 1; max-width: 200px; padding: 9px; font-weight: 600; }
@@ -246,6 +248,7 @@
         <input class="user-input" id="userNameInput" placeholder="输入名字，进度互不影响" autocomplete="off">
         <button class="back-btn" id="switchUserBtn">确定</button>
       </div>
+      <div class="home-sub hidden" id="identChoices"></div>
     </header>
 
     <div class="stack" id="stack"></div>
@@ -363,17 +366,46 @@ for (const s of SHEET_ORDER) {
   c.sheets.push(s);
 }
 
-/* ---------- 存储：按用户隔离 ---------- */
+/* ---------- 存储：身份 = 名字#4位随机码，键用哈希加盐 ---------- */
 const USER_KEY = 'ykt-current-user';
-let userName = localStorage.getItem(USER_KEY) || '';
-// 旧版无用户名数据一次性迁移到"默认"用户
-if (!userName && localStorage.getItem(STORE_KEY) &&
-    !localStorage.getItem(STORE_KEY + ':默认')) {
-  localStorage.setItem(STORE_KEY + ':默认', localStorage.getItem(STORE_KEY));
-  userName = '默认';
-  localStorage.setItem(USER_KEY, '默认');
+const IDX_KEY = 'ykt-idx';
+const SALT = 'ykt-2026';
+function hashKey(s) {
+  let h = 0x811c9dc5;
+  const str = s + '|' + SALT;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return ('0000000' + (h >>> 0).toString(16)).slice(-8);
 }
-function storeKey(name) { return STORE_KEY + ':' + (name || '默认'); }
+function baseOf(id) { return (id || '').split('#')[0]; }
+let idx = {};
+try { idx = JSON.parse(localStorage.getItem(IDX_KEY) || '{}'); } catch (e) { idx = {}; }
+function saveIdx() { localStorage.setItem(IDX_KEY, JSON.stringify(idx)); }
+function storeKey(id) { return STORE_KEY + ':p:' + hashKey(id); }
+
+function migrateLegacy() {
+  const moved = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k || !k.startsWith(STORE_KEY + ':') || k.startsWith(STORE_KEY + ':p:')) continue;
+    const name = k.slice((STORE_KEY + ':').length);
+    if (!name) continue;
+    const code = Math.random().toString(36).slice(2, 6);
+    const newId = name + '#' + code;
+    localStorage.setItem(storeKey(newId), localStorage.getItem(k));
+    localStorage.removeItem(k);
+    moved[name] = newId;
+  }
+  const names = Object.keys(moved);
+  if (names.length && !localStorage.getItem(USER_KEY)) {
+    localStorage.setItem(USER_KEY, moved[names[0]]);
+  }
+}
+migrateLegacy();
+let userName = localStorage.getItem(USER_KEY) || '';
+
 let store = {};
 function loadStore() {
   store = {};
@@ -385,18 +417,62 @@ function loadStore() {
   }
 }
 function saveStore() { localStorage.setItem(storeKey(userName), JSON.stringify(store)); }
-function switchUser(name) {
-  name = (name || '').trim();
-  if (!name) { toast('名字不能为空'); return; }
-  userName = name;
-  localStorage.setItem(USER_KEY, name);
+
+/* ---------- 登录 ---------- */
+function applyUser(id) {
+  userName = id;
+  localStorage.setItem(USER_KEY, id);
+  const b = baseOf(id);
+  if (!idx[b]) idx[b] = [];
+  if (!idx[b].includes(id)) idx[b].push(id);
+  saveIdx();
+  $('identChoices').classList.add('hidden');
   loadStore();
   sel = {};
   if (store.sel) {
     for (const [s, idxs] of Object.entries(store.sel)) sel[s] = new Set(idxs);
   }
   renderHome();
-  toast('已切换到 ' + name);
+  $('userNameInput').value = userName;
+}
+function renderIdentChoices(name, list) {
+  const box = $('identChoices');
+  box.innerHTML = '';
+  box.classList.remove('hidden');
+  for (const id of list) {
+    const b = document.createElement('button');
+    b.className = 'back-btn';
+    b.textContent = '进入 ' + id;
+    b.addEventListener('click', () => applyUser(id));
+    box.appendChild(b);
+  }
+  const nb = document.createElement('button');
+  nb.className = 'back-btn';
+  nb.textContent = '我是新人，新建身份';
+  nb.addEventListener('click', () => {
+    applyUser(name + '#' + Math.random().toString(36).slice(2, 6));
+    toast('新身份已创建，请记住：' + userName);
+  });
+  box.appendChild(nb);
+}
+function login(input) {
+  const name = (input || '').trim();
+  if (!name) { toast('输入名字'); return; }
+  if (name.includes('#')) {
+    applyUser(name);
+    return;
+  }
+  const list = idx[name] || [];
+  if (!list.length) {
+    applyUser(name + '#' + Math.random().toString(36).slice(2, 6));
+    toast('新身份已创建，请记住：' + userName);
+    return;
+  }
+  if (list.length === 1) {
+    applyUser(list[0]);
+    return;
+  }
+  renderIdentChoices(name, list);
 }
 loadStore();
 
@@ -453,7 +529,7 @@ function refreshChip(s) {
 /* ---------- 首页 ---------- */
 function renderHome() {
   $('totalCount').textContent = DATA.length;
-  $('userNameInput').value = userName || '默认';
+  $('userNameInput').value = userName || '';
   const stackEl = $('stack');
   stackEl.innerHTML = '';
   for (const c of CHAPTERS) {
@@ -549,10 +625,10 @@ $('optShuffleBtn').addEventListener('click', () => {
   store.optShuffle = optShuffle; saveStore();
 });
 $('switchUserBtn').addEventListener('click', () => {
-  switchUser($('userNameInput').value);
+  login($('userNameInput').value);
 });
 $('userNameInput').addEventListener('keydown', e => {
-  if (e.key === 'Enter') switchUser($('userNameInput').value);
+  if (e.key === 'Enter') login($('userNameInput').value);
 });
 $('drawBtn').addEventListener('click', () => {
   if (!selCount()) { toast('请先选题'); return; }
